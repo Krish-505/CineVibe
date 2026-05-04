@@ -10,62 +10,37 @@ const getGenAI = () => {
   return new GoogleGenerativeAI(apiKey);
 };
 
-// Genre mapping for TMDb
-const GENRE_MAP: Record<string, number> = {
-  action: 28,
-  adventure: 12,
-  animation: 16,
-  comedy: 35,
-  crime: 80,
-  documentary: 99,
-  drama: 18,
-  family: 10751,
-  fantasy: 14,
-  history: 36,
-  horror: 27,
-  music: 10402,
-  mystery: 9648,
-  romance: 10749,
-  scifi: 878,
-  'sci-fi': 878,
-  thriller: 53,
-  war: 10752,
-  western: 37,
-};
-
 export async function parseMoodToJSON(moodInput: string, refinements?: string[]): Promise<ParsedMood> {
   try {
     const genAI = getGenAI();
-    // Using gemini-1.5-flash for faster response
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+    const model = genAI.getGenerativeModel({ model: 'gemini-pro' });
 
-    let prompt = `
+    const prompt = `
       You are an expert movie recommender AI.
-      Analyze the user's mood and return STRICT structured JSON with movie filter preferences.
+      Analyze the user's mood/input and return STRICT structured JSON to drive our recommendation engine.
       
-      User's Mood: "${moodInput}"
-      ${refinements && refinements.length > 0 ? `User's Refinements: ${refinements.join(', ')}` : ''}
+      User Input: "${moodInput}"
+      ${refinements && refinements.length > 0 ? `Refinements: ${refinements.join(', ')}` : ''}
 
-      JSON Schema requirement:
+      JSON Schema:
       {
-        "genres": [array of TMDB genre IDs (numbers) that match the mood, select 1 to 3 IDs],
-        "pace": "slow" | "medium" | "fast" | "",
-        "tone": "light" | "dark" | "neutral" | "",
-        "avoid": [array of genre names or keywords to avoid],
-        "runtime": "short" | "medium" | "long" | "",
-        "isAnime": boolean
+        "primary_genres": [array of TMDB genre IDs that are ABSOLUTELY ESSENTIAL. E.g., for "crime thriller", use Crime and Thriller IDs. Limit 1-2],
+        "secondary_genres": [array of TMDB genre IDs that are nice-to-have but not strict],
+        "exact_keywords": [array of highly specific keywords and phrases extracted directly from the user's input, e.g., "fast-paced", "martial arts", "happy tears", "choreography"],
+        "themes": [array of semantic themes extracted from input],
+        "tone": "string describing tone, e.g. 'dark', 'lighthearted', 'intense'",
+        "search_query": "A search query compiling the most important exact keywords for the TMDb search API (e.g., 'martial arts choreography')."
       }
 
-      TMDB Genre Map (use these IDs):
+      TMDB Genre Map (USE ONLY THESE IDs):
       Action: 28, Adventure: 12, Animation: 16, Comedy: 35, Crime: 80, Documentary: 99, Drama: 18, Family: 10751, Fantasy: 14, History: 36, Horror: 27, Music: 10402, Mystery: 9648, Romance: 10749, Sci-Fi: 878, Thriller: 53, War: 10752, Western: 37
 
-      Return ONLY valid JSON. No markdown formatting blocks, no extra text.
+      Return ONLY valid JSON. No markdown blocks.
     `;
 
     const result = await model.generateContent(prompt);
     let text = result.response.text().trim();
     
-    // Clean up potential markdown blocks if AI ignored instruction
     if (text.startsWith('\`\`\`json')) {
       text = text.replace(/^\`\`\`json/, '').replace(/\`\`\`$/, '').trim();
     } else if (text.startsWith('\`\`\`')) {
@@ -76,14 +51,12 @@ export async function parseMoodToJSON(moodInput: string, refinements?: string[])
     return parsed;
   } catch (error) {
     console.error('Error parsing mood with Gemini:', error);
-    // Fallback logic
     return {
-      genres: [28, 12, 35], // Action, Adventure, Comedy
-      pace: 'medium',
+      primary_genres: [],
+      secondary_genres: [],
+      themes: [],
       tone: 'neutral',
-      avoid: [],
-      runtime: '',
-      isAnime: false
+      search_query: ''
     };
   }
 }
@@ -96,23 +69,26 @@ export async function generateMovieExplanations(
     if (movies.length === 0) return [];
 
     const genAI = getGenAI();
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+    const model = genAI.getGenerativeModel({ model: 'gemini-pro' });
 
-    const movieData = movies.map((m, i) => `[${i}] Title: ${m.title}, Overview: ${m.overview}, Genres: ${m.genre_ids.join(', ')}`).join('\n');
+    const movieData = movies.map((m, i) => `[ID: ${i}] Title: "${m.title}"\nPlot Overview: "${m.overview}"\n`).join('\n');
 
     const prompt = `
-      You are an expert movie recommender AI.
-      The user is looking for a movie based on this mood/request: "${moodInput}"
+      You are an elite cinematic curator.
+      The user requested movies based on this specific vibe: "${moodInput}"
       
-      I have selected the following movies. For EACH movie, write a 2-3 line, human-like, specific explanation of WHY it perfectly matches their mood. 
-      Do NOT write a generic summary. Explain the VIBE and why it fits.
+      Write a HIGHLY SPECIFIC, completely unique 2-3 line explanation for EACH movie detailing exactly why its plot and tone match the user's mood.
+
+      CRITICAL RULES:
+      1. NO GENERIC PHRASES. DO NOT USE: "This movie fits perfectly...", "If you are looking for...", "A great choice for..."
+      2. You MUST explicitly reference specific plot elements, character situations, or atmospheric details from the Plot Overview.
+      3. Mention the specific emotional tone or pacing.
+      4. EVERY explanation MUST sound completely different and start with a different sentence structure.
 
       Movies:
       ${movieData}
 
-      Return a STRICT JSON array of strings, where each string is the explanation for the movie at that index.
-      Example: ["explanation for movie 0", "explanation for movie 1", ...]
-      
+      Return a STRICT JSON array of strings, where each string is the explanation for the movie at that index ID.
       Return ONLY valid JSON array. No markdown formatting.
     `;
 
@@ -126,10 +102,14 @@ export async function generateMovieExplanations(
     }
 
     const explanations: string[] = JSON.parse(text);
+    
+    if (!Array.isArray(explanations) || explanations.length !== movies.length) {
+      throw new Error("Explanation count mismatch");
+    }
+    
     return explanations;
   } catch (error) {
     console.error('Error generating explanations with Gemini:', error);
-    // Fallback explanations
-    return movies.map(m => `This movie features themes and a tone that align well with what you're looking for right now.`);
+    return movies.map(m => `The intricate narrative and thematic elements of ${m.title} perfectly capture the specific vibe you requested.`);
   }
 }

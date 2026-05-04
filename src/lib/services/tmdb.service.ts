@@ -1,134 +1,113 @@
-import { TMDbMovie, StreamingInfo } from '@/types';
+import { TMDbMovie, StreamingInfo, CastMember, MediaItem } from '@/types';
 
-const TMDB_BASE_URL = 'https://api.themoviedb.org/3';
+const TMDB_API_KEY = process.env.NEXT_PUBLIC_TMDB_API_KEY || process.env.TMDB_API_KEY;
+const BASE_URL = 'https://api.themoviedb.org/3';
 
-// We'll use the API key in headers to authenticate
-const getHeaders = () => {
-  const apiKey = process.env.NEXT_PUBLIC_TMDB_API_KEY;
-  if (!apiKey) {
-    throw new Error('TMDb API Key is missing. Check your environment variables.');
+async function fetchFromTMDB<T>(endpoint: string, params: Record<string, string> = {}): Promise<T> {
+  const queryParams = new URLSearchParams({
+    api_key: TMDB_API_KEY || '',
+    ...params,
+  });
+
+  const response = await fetch(`${BASE_URL}${endpoint}?${queryParams.toString()}`, {
+    next: { revalidate: 3600 } // Cache for 1 hour to stay fresh but fast
+  });
+
+  if (!response.ok) {
+    throw new Error(`TMDb API Error: ${response.statusText}`);
   }
-  // If the key is a Bearer token (from TMDB Read Access Token)
-  if (apiKey.length > 50) {
-    return {
-      accept: 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    };
-  }
+
+  return response.json();
+}
+
+// Normalized Transformer
+export function normalizeMedia(item: TMDbMovie, type: 'movie' | 'tv'): MediaItem {
   return {
-    accept: 'application/json',
+    id: item.id,
+    type,
+    title: item.title || item.name || 'Unknown Title',
+    release_date: item.release_date || item.first_air_date || '',
+    poster_path: item.poster_path,
+    backdrop_path: item.backdrop_path,
+    overview: item.overview,
+    vote_average: item.vote_average,
+    vote_count: item.vote_count,
+    popularity: item.popularity,
+    genre_ids: item.genre_ids || [],
+    original_language: item.original_language
   };
-};
-
-// URL helper for standard query param auth fallback
-const getUrl = (path: string, params: Record<string, string> = {}) => {
-  const apiKey = process.env.NEXT_PUBLIC_TMDB_API_KEY || '';
-  const searchParams = new URLSearchParams(params);
-  // Add api_key param if it's the short v3 key instead of a bearer token
-  if (apiKey.length <= 50) {
-    searchParams.append('api_key', apiKey);
-  }
-  return `${TMDB_BASE_URL}${path}?${searchParams.toString()}`;
-};
-
-export async function discoverMovies(params: Record<string, string>): Promise<TMDbMovie[]> {
-  try {
-    const url = getUrl('/discover/movie', {
-      include_adult: 'false',
-      include_video: 'false',
-      language: 'en-US',
-      ...params,
-    });
-
-    const res = await fetch(url, {
-      method: 'GET',
-      headers: getHeaders(),
-      next: { revalidate: 3600 }, // Cache for 1 hour
-    });
-
-    if (!res.ok) {
-      console.error('TMDB Discover Error:', await res.text());
-      return [];
-    }
-
-    const data = await res.json();
-    return data.results || [];
-  } catch (error) {
-    console.error('Error in discoverMovies:', error);
-    return [];
-  }
 }
 
-export async function getMovieTrailer(movieId: number): Promise<string | undefined> {
+// MOVIE ENDPOINTS
+export async function discoverMovies(params: Record<string, string> = {}): Promise<MediaItem[]> {
+  const data = await fetchFromTMDB<{ results: TMDbMovie[] }>('/discover/movie', params);
+  return data.results.map(m => normalizeMedia(m, 'movie'));
+}
+
+export async function searchMovies(query: string, params: Record<string, string> = {}): Promise<MediaItem[]> {
+  const data = await fetchFromTMDB<{ results: TMDbMovie[] }>('/search/movie', { query, ...params });
+  return data.results.map(m => normalizeMedia(m, 'movie'));
+}
+
+export async function getTrendingMovies(): Promise<MediaItem[]> {
+  const data = await fetchFromTMDB<{ results: TMDbMovie[] }>('/trending/movie/day');
+  return data.results.map(m => normalizeMedia(m, 'movie'));
+}
+
+// TV ENDPOINTS
+export async function discoverTV(params: Record<string, string> = {}): Promise<MediaItem[]> {
+  const data = await fetchFromTMDB<{ results: TMDbMovie[] }>('/discover/tv', params);
+  return data.results.map(m => normalizeMedia(m, 'tv'));
+}
+
+export async function searchTV(query: string, params: Record<string, string> = {}): Promise<MediaItem[]> {
+  const data = await fetchFromTMDB<{ results: TMDbMovie[] }>('/search/tv', { query, ...params });
+  return data.results.map(m => normalizeMedia(m, 'tv'));
+}
+
+export async function getTrendingTV(): Promise<MediaItem[]> {
+  const data = await fetchFromTMDB<{ results: TMDbMovie[] }>('/trending/tv/day');
+  return data.results.map(m => normalizeMedia(m, 'tv'));
+}
+
+// COMMON ENDPOINTS
+export async function getTrailer(id: number, type: 'movie' | 'tv'): Promise<string | undefined> {
   try {
-    const url = getUrl(`/movie/${movieId}/videos`, { language: 'en-US' });
-    const res = await fetch(url, {
-      method: 'GET',
-      headers: getHeaders(),
-      next: { revalidate: 86400 }, // Cache for 24 hours
-    });
-
-    if (!res.ok) return undefined;
-
-    const data = await res.json();
-    const trailers = data.results?.filter(
-      (v: any) => v.site === 'YouTube' && v.type === 'Trailer'
-    );
-    
-    // Fallback to teasers if no trailer
-    if (!trailers || trailers.length === 0) {
-      const teasers = data.results?.filter((v: any) => v.site === 'YouTube');
-      return teasers?.[0]?.key;
-    }
-
-    return trailers[0]?.key;
-  } catch (error) {
-    console.error('Error in getMovieTrailer:', error);
+    const data = await fetchFromTMDB<{ results: any[] }>(`/${type}/${id}/videos`);
+    const trailer = data.results.find((v) => v.type === 'Trailer' && v.site === 'YouTube');
+    return trailer?.key;
+  } catch {
     return undefined;
   }
 }
 
-export async function getWatchProviders(movieId: number): Promise<StreamingInfo | undefined> {
+export async function getWatchProviders(id: number, type: 'movie' | 'tv'): Promise<StreamingInfo | undefined> {
   try {
-    const url = getUrl(`/movie/${movieId}/watch/providers`);
-    const res = await fetch(url, {
-      method: 'GET',
-      headers: getHeaders(),
-      next: { revalidate: 86400 }, // Cache for 24 hours
-    });
-
-    if (!res.ok) return undefined;
-
-    const data = await res.json();
-    // Assuming US region for simplicity, can be expanded later
-    return data.results?.US;
-  } catch (error) {
-    console.error('Error in getWatchProviders:', error);
+    const data = await fetchFromTMDB<{ results: Record<string, any> }>(`/${type}/${id}/watch/providers`);
+    return data.results['US']; // Defaulting to US for now, could be dynamic
+  } catch {
     return undefined;
   }
 }
 
-export async function searchMovies(query: string): Promise<TMDbMovie[]> {
+export async function getCredits(id: number, type: 'movie' | 'tv'): Promise<CastMember[]> {
   try {
-    const url = getUrl('/search/movie', {
-      query,
-      include_adult: 'false',
-      language: 'en-US',
-      page: '1',
-    });
-
-    const res = await fetch(url, {
-      method: 'GET',
-      headers: getHeaders(),
-      next: { revalidate: 86400 },
-    });
-
-    if (!res.ok) return [];
-
-    const data = await res.json();
-    return data.results || [];
-  } catch (error) {
-    console.error('Error in searchMovies:', error);
+    const data = await fetchFromTMDB<{ cast: CastMember[] }>(`/${type}/${id}/credits`);
+    return data.cast.slice(0, 10);
+  } catch {
     return [];
   }
+}
+
+export async function getSimilar(id: number, type: 'movie' | 'tv'): Promise<MediaItem[]> {
+  try {
+    const data = await fetchFromTMDB<{ results: TMDbMovie[] }>(`/${type}/${id}/similar`);
+    return data.results.slice(0, 8).map(m => normalizeMedia(m, type));
+  } catch {
+    return [];
+  }
+}
+
+export async function getDetails(id: number, type: 'movie' | 'tv'): Promise<any> {
+  return await fetchFromTMDB<any>(`/${type}/${id}`);
 }

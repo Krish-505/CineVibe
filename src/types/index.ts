@@ -1,6 +1,23 @@
 export interface TMDbMovie {
   id: number;
+  title?: string;
+  name?: string; // For TV
+  poster_path: string | null;
+  backdrop_path: string | null;
+  vote_average: number;
+  vote_count: number;
+  release_date?: string;
+  first_air_date?: string; // For TV
+  genre_ids: number[];
+  overview: string;
+  popularity: number;
+  original_language: string;
+}
+
+export interface MediaItem {
+  id: number;
   title: string;
+  type: 'movie' | 'tv';
   poster_path: string | null;
   backdrop_path: string | null;
   vote_average: number;
@@ -9,6 +26,10 @@ export interface TMDbMovie {
   genre_ids: number[];
   overview: string;
   popularity: number;
+  original_language: string;
+  explanation?: string;
+  trailer_key?: string;
+  streaming_info?: StreamingInfo;
 }
 
 export interface WatchProvider {
@@ -25,21 +46,25 @@ export interface StreamingInfo {
 }
 
 export interface ParsedMood {
-  genres: number[];
-  pace: 'slow' | 'medium' | 'fast' | '';
-  tone: 'light' | 'dark' | 'neutral' | '';
-  avoid: string[];
-  runtime: 'short' | 'medium' | 'long' | '';
-  isAnime: boolean;
+  primary_genres: number[];
+  secondary_genres: number[];
+  exact_keywords?: string[];
+  themes: string[];
+  tone: string;
+  search_query: string;
 }
 
-export interface MovieRecommendation extends TMDbMovie {
-  explanation: string;
-  trailer_key?: string;
-  streaming_info?: StreamingInfo;
+export interface ActiveFilters {
+  contentType?: 'movie' | 'tv' | 'both';
+  language?: string;
+  genre?: number;
+  moodEmoji?: string;
+  runtime?: 'short' | 'long';
 }
 
-export interface MoodRequest {
-  mood: string;
-  refinements?: string[];
+export interface CastMember {
+  id: number;
+  name: string;
+  character: string;
+  profile_path: string | null;
 }

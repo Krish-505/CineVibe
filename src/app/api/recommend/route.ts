@@ -1,70 +1,127 @@
 import { NextResponse } from 'next/server';
 import { parseMoodToJSON, generateMovieExplanations } from '@/lib/services/ai.service';
-import { discoverMovies, getMovieTrailer, getWatchProviders } from '@/lib/services/tmdb.service';
+import { discoverMovies, searchMovies, getTrendingMovies, discoverTV, searchTV, getTrendingTV, getTrailer, getWatchProviders } from '@/lib/services/tmdb.service';
 import { scoreAndFilterMovies } from '@/lib/services/scoring.service';
-import { MovieRecommendation, TMDbMovie } from '@/types';
+import { MovieRecommendation, MediaItem, ActiveFilters } from '@/types';
 
-export const maxDuration = 60; // Allow longer execution time for multiple API calls
+export const maxDuration = 60;
 
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { mood, refinements = [], isPerfectPick = false } = body;
+    const { mood, refinements = [], filters, isPerfectPick = false } = body;
 
-    if (!mood) {
-      return NextResponse.json({ error: 'Mood is required' }, { status: 400 });
+    if (!mood && !filters) {
+      return NextResponse.json({ error: 'Mood or filters are required' }, { status: 400 });
     }
 
-    // 1. Parse Mood
-    const parsedMood = await parseMoodToJSON(mood, refinements);
+    const fullMoodText = `${mood || ''} ${refinements.join(' ')}`;
+    const activeFilters = filters as ActiveFilters;
+    const contentType = activeFilters?.contentType || 'both'; // 'movie', 'tv', 'both'
+
+    // 1. Parse Mood Semantic Intent
+    let parsedMood = { primary_genres: [], secondary_genres: [], themes: [], tone: 'neutral', search_query: '' } as any;
+    if (fullMoodText.trim()) {
+      parsedMood = await parseMoodToJSON(fullMoodText);
+    }
     
-    // Default to some genres if none parsed
-    const genreIds = parsedMood.genres.length > 0 ? parsedMood.genres : [28, 12, 35]; 
-
-    // 2. Discover Movies from TMDB
-    let discoveredMovies: TMDbMovie[] = [];
+    // 2. Multi-Source Fetching Strategy (100+ items)
+    let discoveredItems: MediaItem[] = [];
     
-    // We fetch a few pages to get a good pool of movies
-    for (let page = 1; page <= 2; page++) {
-      const results = await discoverMovies({
-        with_genres: genreIds.join(','),
-        sort_by: 'popularity.desc',
-        page: page.toString(),
-        'vote_average.gte': '6.0',
-        'vote_count.gte': '100',
-      });
-      discoveredMovies = [...discoveredMovies, ...results];
+    let discoverParams: Record<string, string> = {
+      sort_by: 'vote_average.desc',
+      'vote_count.gte': '200', 
+    };
+
+    // If AI found strict genres, use them
+    if (parsedMood.primary_genres.length > 0) {
+      // Use OR logic for TMDb if multiple primary genres to avoid overly strict API failure.
+      // The local scoring service will enforce the "at least one" rule strictly.
+      discoverParams.with_genres = parsedMood.primary_genres.join('|'); 
+    }
+    
+    // Industry Language mapping
+    if (activeFilters?.language) {
+      if (activeFilters.language === 'indian') {
+        discoverParams.with_original_language = 'hi|ta|te';
+      } else if (activeFilters.language === 'ja') {
+        discoverParams.with_original_language = 'ja';
+        discoverParams.with_genres = discoverParams.with_genres ? `${discoverParams.with_genres},16` : '16';
+      } else {
+        discoverParams.with_original_language = activeFilters.language;
+      }
     }
 
-    // Fallback: if very few results, relax constraints
-    if (discoveredMovies.length < 5) {
-      const fallbackResults = await discoverMovies({
-        with_genres: genreIds.slice(0, 1).join(','), // Just use the first genre
-        sort_by: 'popularity.desc',
-        page: '1',
-      });
-      discoveredMovies = [...discoveredMovies, ...fallbackResults];
+    // Prepare async fetch calls based on Content Type
+    const fetchPromises: Promise<MediaItem[]>[] = [];
+    
+    // Random pages to ensure diversity
+    const randomPageStart = Math.floor(Math.random() * 5) + 1;
+    const pages = [randomPageStart, randomPageStart + 1, randomPageStart + 2];
+
+    if (contentType === 'movie' || contentType === 'both') {
+      pages.forEach(p => fetchPromises.push(discoverMovies({ ...discoverParams, page: p.toString() }).catch(() => [])));
+      fetchPromises.push(getTrendingMovies().catch(() => []));
+      if (parsedMood.search_query) {
+        fetchPromises.push(searchMovies(parsedMood.search_query).catch(() => []));
+      }
     }
 
-    // 3. Score and Filter
-    const targetCount = isPerfectPick ? 1 : 5;
-    const selectedMovies = scoreAndFilterMovies(discoveredMovies, parsedMood, targetCount);
+    if (contentType === 'tv' || contentType === 'both') {
+      pages.forEach(p => fetchPromises.push(discoverTV({ ...discoverParams, page: p.toString() }).catch(() => [])));
+      fetchPromises.push(getTrendingTV().catch(() => []));
+      if (parsedMood.search_query) {
+        fetchPromises.push(searchTV(parsedMood.search_query).catch(() => []));
+      }
+    }
 
-    if (selectedMovies.length === 0) {
-      return NextResponse.json({ error: 'No movies found matching criteria' }, { status: 404 });
+    const pagesResults = await Promise.all(fetchPromises);
+    discoveredItems = pagesResults.flat();
+
+    // Deduplicate Heavy (Anti-Repetition)
+    const getUnique = (arr: MediaItem[]) => {
+      const map = new Map();
+      arr.forEach(m => map.set(m.id, m));
+      return Array.from(map.values());
+    };
+    discoveredItems = getUnique(discoveredItems);
+
+    // Initial Scoring & Filtering
+    // If Perfect Pick is true, we ONLY want 1. Otherwise, return 5.
+    const limit = isPerfectPick ? 1 : 5;
+    let selectedItems = scoreAndFilterMovies(discoveredItems, parsedMood, fullMoodText, activeFilters, limit, isPerfectPick);
+
+    // Adaptive Fetching (If strict filtering wiped out our pool)
+    if (selectedItems.length < limit) {
+      console.log('Adaptive fetching: Insufficient results after strict filtering. Fetching more...');
+      const morePages = [randomPageStart + 3, randomPageStart + 4, randomPageStart + 5];
+      const morePromises: Promise<MediaItem[]>[] = [];
+      
+      if (contentType === 'movie' || contentType === 'both') {
+        morePages.forEach(p => morePromises.push(discoverMovies({ ...discoverParams, page: p.toString() }).catch(() => [])));
+      }
+      if (contentType === 'tv' || contentType === 'both') {
+         morePages.forEach(p => morePromises.push(discoverTV({ ...discoverParams, page: p.toString() }).catch(() => [])));
+      }
+      
+      const moreResults = await Promise.all(morePromises);
+      discoveredItems = getUnique([...discoveredItems, ...moreResults.flat()]);
+      
+      // Rescore with larger pool
+      selectedItems = scoreAndFilterMovies(discoveredItems, parsedMood, fullMoodText, activeFilters, limit, isPerfectPick);
+    }
+
+    if (selectedItems.length === 0) {
+      return NextResponse.json({ error: 'No exact matches found. Try relaxing your filters or mood description.' }, { status: 404 });
     }
 
     // 4. Enrich with Explanations, Trailers, and Providers
-    // Run explanations in parallel with TMDB enrichment
-    const explanationsPromise = generateMovieExplanations(
-      `${mood} ${refinements.length > 0 ? '(Refinements: ' + refinements.join(', ') + ')' : ''}`, 
-      selectedMovies
-    );
+    const explanationsPromise = generateMovieExplanations(fullMoodText, selectedItems);
 
-    const enrichmentPromises = selectedMovies.map(async (movie) => {
+    const enrichmentPromises = selectedItems.map(async (item) => {
       const [trailer_key, streaming_info] = await Promise.all([
-        getMovieTrailer(movie.id),
-        getWatchProviders(movie.id),
+        getTrailer(item.id, item.type),
+        getWatchProviders(item.id, item.type),
       ]);
       return { trailer_key, streaming_info };
     });
@@ -75,9 +132,9 @@ export async function POST(req: Request) {
     ]);
 
     // 5. Combine everything
-    const recommendations: MovieRecommendation[] = selectedMovies.map((movie, index) => ({
-      ...movie,
-      explanation: explanations[index] || 'A great match for your current mood.',
+    const recommendations: MovieRecommendation[] = selectedItems.map((item, index) => ({
+      ...item,
+      explanation: explanations[index] || `A cinematic masterpiece matching your requested vibe.`,
       trailer_key: enrichments[index].trailer_key,
       streaming_info: enrichments[index].streaming_info,
     }));

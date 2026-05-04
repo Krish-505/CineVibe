@@ -1,5 +1,6 @@
 import { motion } from 'framer-motion';
-import { Play, Star, Clock } from 'lucide-react';
+import { Star, Calendar } from 'lucide-react';
+import Link from 'next/link';
 import { MovieRecommendation } from '@/types';
 
 interface MovieCardProps {
@@ -8,108 +9,95 @@ interface MovieCardProps {
   index: number;
 }
 
-export default function MovieCard({ movie, onPlayTrailer, index }: MovieCardProps) {
+export default function MovieCard({ movie, index }: MovieCardProps) {
   const posterUrl = movie.poster_path
     ? `https://image.tmdb.org/t/p/w500${movie.poster_path}`
     : 'https://via.placeholder.com/500x750?text=No+Poster';
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 30 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.5, delay: index * 0.1 }}
-      className="group relative flex flex-col md:flex-row gap-6 p-6 rounded-2xl glass overflow-hidden hover:bg-zinc-900/80 transition-all duration-300 border border-zinc-800 hover:border-red-500/30 shadow-xl"
+      initial={{ opacity: 0, scale: 0.98, y: 15 }}
+      animate={{ opacity: 1, scale: 1, y: 0 }}
+      transition={{ duration: 0.4, delay: index * 0.1, ease: [0.25, 0.1, 0.25, 1] }}
+      className="group relative flex flex-col sm:flex-row w-full rounded-3xl glass-heavy overflow-hidden transition-all duration-500 ease-out hover:scale-[1.01] hover:shadow-[0_0_30px_rgba(220,38,38,0.15)] border border-white/5 hover:border-red-500/20"
     >
-      {/* Background blur effect */}
-      {movie.backdrop_path && (
-        <div 
-          className="absolute inset-0 z-[-1] opacity-[0.03] group-hover:opacity-[0.08] transition-opacity duration-500 bg-cover bg-center"
-          style={{ backgroundImage: `url(https://image.tmdb.org/t/p/w1280${movie.backdrop_path})` }}
-        />
-      )}
-
-      {/* Poster */}
-      <div className="relative shrink-0 w-full md:w-48 aspect-[2/3] rounded-xl overflow-hidden shadow-lg border border-zinc-800">
-        <img
-          src={posterUrl}
-          alt={movie.title}
-          className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-          loading="lazy"
-        />
-        {movie.trailer_key && (
-          <button
-            onClick={() => onPlayTrailer(movie.trailer_key!)}
-            className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity duration-300"
-          >
-            <div className="w-14 h-14 rounded-full bg-red-600 flex items-center justify-center text-white shadow-[0_0_20px_rgba(220,38,38,0.5)] transform scale-90 group-hover:scale-100 transition-transform">
-              <Play fill="currentColor" className="ml-1" size={24} />
-            </div>
-          </button>
-        )}
-      </div>
-
-      {/* Content */}
-      <div className="flex flex-col flex-1">
-        <div className="flex justify-between items-start gap-4">
-          <h3 className="text-2xl md:text-3xl font-bold text-white group-hover:text-red-400 transition-colors">
-            {movie.title}
-            <span className="text-lg font-normal text-zinc-400 ml-3">
-              {new Date(movie.release_date).getFullYear()}
+      <Link href={`/title/${movie.type}/${movie.id}?exp=${encodeURIComponent(movie.explanation || '')}`} className="flex flex-col sm:flex-row w-full h-full text-left">
+        
+        {/* Poster Image Container (Left side on desktop, Top on mobile) */}
+        <div className="relative w-full sm:w-48 md:w-56 lg:w-64 shrink-0 aspect-[2/3] sm:aspect-auto overflow-hidden">
+          <img
+            src={posterUrl}
+            alt={movie.title}
+            className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
+            loading="lazy"
+          />
+          
+          {/* Format Badge */}
+          <div className="absolute top-4 left-4">
+            <span className="px-2.5 py-1 bg-black/60 backdrop-blur-md rounded-lg text-[10px] font-bold text-zinc-300 uppercase tracking-wider border border-white/10">
+              {movie.type === 'tv' ? 'Series' : 'Movie'}
             </span>
-          </h3>
-          <div className="flex items-center gap-1.5 bg-black/50 px-3 py-1.5 rounded-full border border-zinc-800 shrink-0">
-            <Star className="text-yellow-500" fill="currentColor" size={16} />
-            <span className="font-bold text-white">{movie.vote_average.toFixed(1)}</span>
+          </div>
+
+          {/* Rating Badge */}
+          <div className="absolute top-4 right-4 flex items-center gap-1.5 bg-black/60 backdrop-blur-md px-2 py-1 rounded-lg border border-white/10 text-white font-bold text-xs">
+            <Star className="text-yellow-500" fill="currentColor" size={12} />
+            {movie.vote_average.toFixed(1)}
           </div>
         </div>
 
-        {/* AI Explanation */}
-        <div className="mt-4 p-4 rounded-xl bg-zinc-900/50 border border-zinc-800/50 relative overflow-hidden">
-          <div className="absolute top-0 left-0 w-1 h-full bg-gradient-to-b from-red-500 to-orange-500" />
-          <p className="text-zinc-300 text-sm md:text-base leading-relaxed italic">
-            "{movie.explanation}"
-          </p>
-        </div>
-
-        {/* Details & Providers */}
-        <div className="mt-auto pt-6 flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-center gap-4 text-sm text-zinc-400">
-            {/* We could add runtime here if we fetched detailed movie info, but basic TMDB discover doesn't return runtime. We could just skip or add a mock if missing */}
-          </div>
-
-          <div className="flex items-center gap-3">
-            {movie.streaming_info?.flatrate ? (
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-zinc-500 uppercase tracking-wider font-semibold mr-2">Stream on</span>
-                <div className="flex -space-x-2">
-                  {movie.streaming_info.flatrate.slice(0, 3).map((provider) => (
-                    <img
-                      key={provider.provider_id}
-                      src={`https://image.tmdb.org/t/p/w45${provider.logo_path}`}
-                      alt={provider.provider_name}
-                      title={provider.provider_name}
-                      className="w-8 h-8 rounded-full border-2 border-zinc-900 z-10"
-                    />
-                  ))}
-                </div>
-              </div>
-            ) : movie.streaming_info?.rent ? (
-              <span className="text-xs text-zinc-500 uppercase tracking-wider font-semibold">Available to Rent</span>
-            ) : (
-              <span className="text-xs text-zinc-600 uppercase tracking-wider font-semibold">No streaming data</span>
-            )}
+        {/* Content Section (Right side on desktop) */}
+        <div className="flex-1 p-6 md:p-8 flex flex-col justify-between bg-gradient-to-r from-transparent to-black/40">
+          <div>
+            <h3 className="text-2xl md:text-3xl font-black text-white leading-tight drop-shadow-lg line-clamp-2 mb-2 group-hover:text-red-400 transition-colors">
+              {movie.title}
+            </h3>
             
-            {movie.trailer_key && (
-               <button
-                 onClick={() => onPlayTrailer(movie.trailer_key!)}
-                 className="md:hidden ml-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-semibold rounded-lg flex items-center gap-2 transition-colors"
-               >
-                 <Play size={16} fill="currentColor" /> Trailer
-               </button>
-            )}
+            <div className="flex items-center gap-4 text-xs font-medium text-zinc-400 mb-4">
+              <div className="flex items-center gap-1.5">
+                <Calendar size={14} className="text-red-500" />
+                {movie.release_date ? new Date(movie.release_date).getFullYear() : 'Unknown'}
+              </div>
+            </div>
+
+            {/* AI Explanation / Highlight */}
+            <div className="mb-6">
+              <p className="text-sm md:text-base text-zinc-300 leading-relaxed italic border-l-2 border-red-500/50 pl-4 font-light">
+                "{movie.explanation}"
+              </p>
+            </div>
+            
+            {/* Overview (truncated) */}
+            <p className="text-xs md:text-sm text-zinc-500 leading-relaxed line-clamp-3 md:line-clamp-2 max-w-3xl">
+              {movie.overview}
+            </p>
+          </div>
+
+          {/* Streaming Providers Footer */}
+          <div className="flex items-center gap-3 mt-6 pt-4 border-t border-white/5">
+             {movie.streaming_info?.flatrate ? (
+               <div className="flex items-center gap-3">
+                 <span className="text-[10px] text-zinc-500 uppercase tracking-widest font-bold">Stream On</span>
+                 <div className="flex -space-x-2">
+                   {movie.streaming_info.flatrate.slice(0, 4).map((provider) => (
+                     <img
+                       key={provider.provider_id}
+                       src={`https://image.tmdb.org/t/p/w45${provider.logo_path}`}
+                       alt={provider.provider_name}
+                       title={provider.provider_name}
+                       className="w-7 h-7 rounded-full border-2 border-zinc-900 z-10 hover:z-20 hover:scale-110 transition-transform"
+                     />
+                   ))}
+                 </div>
+               </div>
+             ) : movie.streaming_info?.rent ? (
+               <span className="text-[10px] text-zinc-500 uppercase tracking-widest font-bold bg-white/5 px-2.5 py-1.5 rounded-md border border-white/5">Available for Rent/Buy</span>
+             ) : (
+               <span className="text-[10px] text-zinc-600 uppercase tracking-widest font-bold">No streaming data available</span>
+             )}
           </div>
         </div>
-      </div>
+      </Link>
     </motion.div>
   );
 }
